@@ -4,7 +4,6 @@ import torch
 import pickle
 import numpy as np
 import pandas as pd
-import gymnasium as gym
 import matplotlib.pyplot as plt
 
 from pathlib import Path
@@ -13,28 +12,31 @@ from random import choices
 from tqdm.auto import tqdm
 from itertools import product
 from typing import List, Dict, Any, Tuple, Optional
-from stable_baselines3 import DQN
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common import results_plotter
-from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
 
-class DQNTrainer:
+from src.config import PATHS
+from src.utils.utils_vocab import BasicTokenizer, evaluate 
+from src.modelos.bert import BERT
 
-    N_ENVS = 1
+
+class NNTrainer:
+
     N_POINTS = 5
-    TIME_STEPS = 10_000   
+    N_EPOCHS = 2 
     LOGGER = list()
-    LOGGER_PATH = Path('logger_sweep.json')
-    TRAINER_PATH = Path('trainer.pkl')
-    accepted_optimizers = ['adam', 'sgd']
+    LOGGER_PATH = PATHS["trainer_folder"] / Path('logger_sweep.json')
+    TRAINER_PATH = PATHS["trainer_folder"] / Path('trainer.pkl')
     TRAINING_IN_EARNEST = False
     debug = True
+    PAD_IDX = 1
 
-    def __init__(self, env, env_name:Optional[str]='Env') -> None:
-        self.env = env
-        self.ENV_NAME = env_name
+    def __init__(self, nombre:str, tokenizer_file:Path) -> None:
+        self.nombre = nombre
+        special_symbols = ['[UNK]', '[PAD]', '[CLS]', '[SEP]', '[MASK]']
+        simple_tokenizer = lambda tokens_string: tokens_string.strip().split()
+        tokenizer = BasicTokenizer.create_using_stoi(simple_tokenizer, special_symbols, tokenizer_file)
+        self.tokenizer = tokenizer
         self.crear_puntos()
+        self.device = self.get_device()
 
     def ejecutar_barrido(self) -> None:
         for punto in tqdm(self.puntos, desc='Ejecutando punto...'):
@@ -53,65 +55,106 @@ class DQNTrainer:
         """
         Ejecuta el entrenamiento del modelo.
         """
-        # Generar los parámetros de entrenamiento
-        learning_rate_kwargs, policy_kwargs, model_kwargs = self.generar_parametros_entrenamiento(punto)
         # Crear el modelo
-        self.crear_modelo(learning_rate_kwargs, policy_kwargs, model_kwargs)
+        self.crear_modelo(punto)
         # Entrenar el modelo
-        if self.TRAINING_IN_EARNEST: progress_bar = True
-        self.model.learn(
-            total_timesteps=self.TIME_STEPS, 
-            reset_num_timesteps=False, 
-            progress_bar=progress_bar
-        )
+        loss, f1, accuracy = self.train_model()
+        # Guardar el modelo
         if save_log:
             # Guardar datos en log
             log = dict()
-            log['learning_rate_kwargs'] = learning_rate_kwargs
-            log['policy_kwargs'] = policy_kwargs
-            log['model_kwargs'] = model_kwargs
-            reward = self.obtener_reward()
-            log['reward'] = reward
+            log['loss'] = loss
+            log['f1'] = f1
+            log['accuracy'] = accuracy
             self.LOGGER.append(log)
-    
-    def make_env(self, ENV_NAME, id:int=0) -> gym.Env:
-        # Creamos el entorno de mercado
-        def _init():
-            if self.TRAINING_IN_EARNEST:
-                log_file = os.path.join(f"logs_{ENV_NAME}", f"_{id}")
-                env = Monitor(deepcopy(self.env), log_file, allow_early_resets=True)
-            else:
-                env = deepcopy(self.env)
-            return env
-        return _init
+        
+    def train_model(self) -> Tuple[float, float, float]:
+        # Crear dataloader
+        train_dataloader , test_dataloader = self.create_dataloader()
+        
+        # Entrena el modelo
+        # Training loop setup
+        num_epochs = self.N_EPOCHS
+        total_steps = num_epochs * len(train_dataloader)
+        
+        # Lists to store losses for plotting
+        train_losses = []
+        eval_losses = []
+        accurracies = []
+        f1s = []
 
-    def crear_modelo(self, learning_rate_kwargs, policy_kwargs:Dict[str, Any], model_kwargs:Dict[str, Any]) -> None:
+        for epoch in tqdm(range(num_epochs), desc="Training Epochs"):
+            self.model.train()
+            total_loss = 0
+
+            for step, batch in enumerate(tqdm(train_dataloader, desc=f"Epoch {epoch + 1}")):
+                bert_inputs, bert_labels, segment_labels, is_nexts = [b.to(self.device) for b in batch]
+
+                self.optimizer.zero_grad()
+                next_sentence_prediction, masked_language = self.model(bert_inputs, segment_labels)
+
+                next_loss = self.loss_fn_nsp(next_sentence_prediction, is_nexts)
+                mask_loss = self.loss_fn_mlm(masked_language.view(-1, masked_language.size(-1)), bert_labels.view(-1))
+
+                loss = next_loss + mask_loss
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                self.optimizer.step()
+                self.scheduler.step()  # Update the learning rate
+
+                #total_loss += loss.item()
+
+                if torch.isnan(loss):
+
+                    raise Exception(f'{loss.item()=}---{next_sentence_prediction=}\n{masked_language=}\n{next_loss=}\n{mask_loss=}\n{total_loss=}\n {bert_inputs=}\n{bert_labels=}\n{segment_labels=}\n{is_nexts=}') 
+                else:
+                    total_loss += loss.item()
+
+            avg_train_loss = total_loss / len(train_dataloader) + 1
+            assert(not np.isnan(avg_train_loss)), f'{loss.item()=}---{total_loss=}\n {bert_inputs=}\n{bert_labels=}\n{segment_labels=}\n{is_nexts=}'
+            train_losses.append(avg_train_loss)
+            #print(f"Epoch {epoch+1} - Average training loss: {avg_train_loss:.4f}")
+
+            # Evaluation after each epoch
+            eval_loss, acc, f1 = evaluate(test_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
+            eval_losses.append(eval_loss)
+            accurracies.append(acc)
+            f1s.append(f1)
+            return eval_losses, accurracies, f1s
+    
+    def crear_modelo(self, punto:List[Tuple[any]]) -> None:
         """
         Crea el modelo de entrenamiento.
         """
-        # Funcion asocida a la politica de exploracion con base en el proceso de entrenamiento
-        def learning_rate_fn(process_remaining):
-            initial = learning_rate_kwargs['initial_learning_rate']
-            final =  learning_rate_kwargs['final_learning_rate']
-            return final + (initial - final) * process_remaining
-        
-        # Crear el entorno de entrenamiento
-        train_env = DummyVecEnv([self.make_env(self.ENV_NAME, i) for i in range(self.N_ENVS)])        
-        # Actualizar parametros policy con el optmizer
-        policy_kwargs_ = policy_kwargs.copy()
-        policy_kwargs_['optimizer_class'] = self.crear_optimizer(policy_kwargs['optimizer_class'])
-        # Asignar parametros modelo
-        model_kwargs_ = dict(
-            policy="MlpPolicy",
-            seed=42,
-            policy_kwargs=policy_kwargs_,
-            learning_rate=learning_rate_fn,
-            stats_window_size=50,
-            verbose=0
-        )        
-        model_kwargs_.update(model_kwargs)
-        # Instanciar el agente de entrenamiento
-        self.model = DQN(env=train_env, **model_kwargs_)
+        # Define parameters
+        vocab_size = self.tokenizer.get_vocab_size()  # Replace VOCAB_SIZE with your vocabulary size
+        d_model = punto[0]  # Replace EMBEDDING_DIM with your embedding dimension
+        n_layers = punto[1]  # Number of Transformer layers
+        initial_heads = punto[2]  # Number of attention heads
+        # Ensure the number of heads is a factor of the embedding dimension
+        heads = initial_heads - d_model % initial_heads
+
+        dropout = punto[3]  # Dropout rate
+
+        # Create an instance of the BERT model
+        self.model = BERT(vocab_size, d_model, n_layers, heads, dropout)
+        self.model.to(self.device)
+        # Define the optimizer
+        self.optimizer = self.crear_optimizer(punto[4], punto[5])
+        # Define the learning rate scheduler
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=punto[6])
+        # Define the loss functions
+        self.loss_fn_mlm = torch.nn.CrossEntropyLoss(ignore_index=self.PAD_IDX)
+        self.loss_fn_nsp = torch.nn.CrossEntropyLoss()
+
+    def get_device(safe=False):
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available() and not safe:
+            device = 'mps'
+        else:
+            device = 'cpu'
+        return device
 
     def obtener_reward(self) -> float:
         mean_reward, std_reward = evaluate_policy(
@@ -160,37 +203,31 @@ class DQNTrainer:
         # print(f'{model_kwargs=}')
         return learning_rate_kwargs, policy_kwargs, model_kwargs
     
-    def crear_optimizer(self, optimizer:str) -> torch.optim:
+    def crear_optimizer(self, optimizer:str, learning_rate:float) -> torch.optim:
         if optimizer == "adam":
-            return torch.optim.Adam
+            return torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         elif optimizer == "sgd":
-            return torch.optim.SGD
+            return torch.optim.SGD(self.model.parameters(), lr=learning_rate)
         else:
             raise Exception(f'Optimizer {optimizer} not accepted. Choose from {self.accepted_optimizers}')
 
     def crear_puntos(self) -> None:
-        rango_learning_rate_initial = [0.01, 0.001, 0.0001]
-        rango_learning_rate_final = [0.01 * x for x in rango_learning_rate_initial]
-        rango_net_arch = [[64, 32], [128, 64], [256, 128]]
+        rango_embedding_dim = [4, 8, 16, 32]
+        rango_net_layers = [4, 6, 8, 10]
+        rango_net_heads = [2, 4, 6, 8]
+        rango_dropout = [0.1, 0.2, 0.3, 0.4]
         rango_optimizer_class = ['adam', 'sgd']
-        rango_buffer_size = [1000, 2000, 5000]
-        rango_target_update_interval = [100, 500, 1000]
-        rango_gamma = [0.9, 0.95, 0.99]
-        rango_exploration_fraction = [0.5, 0.6, 0.7]
-        rango_exploration_initial_eps = [0.8, 0.9, 1.0]
-        rango_exploration_final_eps = [0.01, 0.1, 0.2]
-        rango_batch_size = [32, 64, 128]
+        rango_learning_rate_initial = [0.01, 0.001, 0.0001, 0.00001]
+        rango_gamma = [0.1, 0.2, 0.3, 0.4]
+        rango_batch_size = [16, 32, 64, 128]
         opciones = product(
-            rango_learning_rate_initial,
-            rango_learning_rate_final,
-            rango_net_arch,
+            rango_embedding_dim,
+            rango_net_layers,
+            rango_net_heads,
+            rango_dropout,
             rango_optimizer_class,
-            rango_buffer_size,
-            rango_target_update_interval,
+            rango_learning_rate_initial,
             rango_gamma,
-            rango_exploration_fraction,
-            rango_exploration_initial_eps,
-            rango_exploration_final_eps,
             rango_batch_size
         )
         puntos = choices(
