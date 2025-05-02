@@ -151,26 +151,37 @@ class NNTrainer:
             #print(f"Epoch {epoch+1} - Average training loss: {avg_train_loss:.4f}")
 
             # Evaluation after each epoch
-            _, train_acc, train_f1 = evaluate(train_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
-            train_accurracies.append(train_acc)
-            train_f1s.append(train_f1)
+            if self.TRAINING_IN_EARNEST:
+                _, train_acc, train_f1 = evaluate(train_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
+                train_accurracies.append(train_acc)
+                train_f1s.append(train_f1)
             
-            eval_loss, acc, f1 = evaluate(test_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
-            eval_losses.append(eval_loss)
-            eval_accurracies.append(acc)
-            eval_f1s.append(f1)
+                eval_loss, acc, f1 = evaluate(test_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
+                eval_losses.append(eval_loss)
+                eval_accurracies.append(acc)
+                eval_f1s.append(f1)
+            
+            if not self.TRAINING_IN_EARNEST and (step == len(train_dataloader) - 1):
+                eval_loss, eval_accurracies, eval_f1s = evaluate(test_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
         
         results = dict()
-        results['training'] = {
-            'loss': train_losses,
-            'accurracy': train_acc,
-            'f1': train_f1s
-        }
-        results['test'] = {
-            'loss': eval_losses,
-            'accurracy': eval_accurracies,
-            'f1': eval_f1s
-        }
+        if self.TRAINING_IN_EARNEST:
+            results['training'] = {
+                'loss': train_losses,
+                'accurracy': train_acc,
+                'f1': train_f1s
+            }
+            results['test'] = {
+                'loss': eval_losses,
+                'accurracy': eval_accurracies,
+                'f1': eval_f1s
+            }
+        else:
+            results['test'] = {
+                'loss': [eval_losses],
+                'accurracy': [eval_accurracies],
+                'f1': [eval_f1s]
+            }
 
         return results
     
