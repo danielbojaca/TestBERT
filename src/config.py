@@ -6,8 +6,8 @@ src_dir = src_dir.resolve()
 
 PATHS = {
     "training_data_folder": Path(src_dir, "../datasets/").resolve(),
-    "tokenizer_folder": Path(src_dir, "../src/data/tokenizers/").resolve(),
-    "analisis_folder": Path(src_dir, "../src/data/analisis/").resolve(),
-    "models_folder": Path(src_dir, "../src/data/modelos/").resolve(),
-    "trainer_folder": Path(src_dir, "../data/trainer/").resolve(),
+    "tokenizer_folder": Path(src_dir, "data/tokenizers/").resolve(),
+    "analisis_folder": Path(src_dir, "data/analisis/").resolve(),
+    "models_folder": Path(src_dir, "data/modelos/").resolve(),
+    "trainer_folder": Path(src_dir, "data/trainer/").resolve(),
 }

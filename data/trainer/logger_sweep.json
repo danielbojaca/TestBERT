@@ -1,0 +1,1 @@
+[{"loss": Infinity, "accurracy": Infinity, "f1": Infinity, "hiperparametros": [8, 6, 6, 0.3, "sgd", 0.001, 0.4, 32], "message": "Error: 'accuracy'"}, {"loss": Infinity, "accurracy": Infinity, "f1": Infinity, "hiperparametros": [16, 8, 8, 0.3, "adam", 0.01, 0.4, 4], "message": "Error: 'accuracy'"}]
