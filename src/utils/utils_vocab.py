@@ -212,7 +212,6 @@ def evaluate(dataloader, model, loss_fn_mlm, loss_fn_nsp, device) -> Tuple[float
     with torch.no_grad():  # Turn off gradients for validation, saves memory and computations
         for bert_inputs, bert_labels, segment_labels, is_nexts in dataloader:
             # Forward pass
-            #print(f'{bert_inputs.shape=} --- {segment_labels.shape=}')
             next_sentence_prediction, masked_language = model(bert_inputs, segment_labels)
 
             # Calculate loss for next sentence prediction
@@ -226,28 +225,28 @@ def evaluate(dataloader, model, loss_fn_mlm, loss_fn_nsp, device) -> Tuple[float
             # Sum up the two losses
             loss = next_loss + mask_loss
             if torch.isnan(loss):
-                continue
+                total_loss += 100_000
+                # continue
             else:
                 total_loss += loss.item()
                 total_next_sentence_loss += next_loss.item()
                 total_mask_loss += mask_loss.item()
                 total_batches += 1
 
-            #print('next_sentence_pred:', next_sentence_prediction)
+            # print('next_sentence_pred:', next_sentence_prediction)
             logits = torch.softmax(next_sentence_prediction, dim=1)
-            #print('logits: ', logits)
+            # print('logits: ', logits)
             prediction = torch.argmax(logits, dim=1)         
             total_count += is_nexts.size(0)
             y_true.extend(is_nexts.view(-1).cpu().numpy().tolist())
             y_predict.extend(prediction.cpu().numpy().tolist())
 
     avg_loss = total_loss / (total_batches + 1)
-    avg_next_sentence_loss = total_next_sentence_loss / (total_batches + 1)
-    avg_mask_loss = total_mask_loss / (total_batches + 1)
 
     #print(f"Average Loss: {avg_loss:.4f}, Average Next Sentence Loss: {avg_next_sentence_loss:.4f}, Average Mask Loss: {avg_mask_loss:.4f}")
     acc = accuracy_score(y_true, y_predict)
     f1 = f1_score(y_true, y_predict)    
-    #print(f"Accuracy: {acc}")
-    #print(f"F1 score: {f1}")
+    # print(f'{y_predict=}')
+    # print(f"Accuracy: {acc}")
+    # print(f"F1 score: {f1}")
     return avg_loss, acc, f1

@@ -24,7 +24,7 @@ from src.utils.utils_vocab import BasicTokenizer, BERTDataset, evaluate
 
 class NNTrainer:
 
-    N_POINTS = 10
+    N_POINTS = 20
     N_EPOCHS = 3
     LOGGER = list()
     LOGGER_PATH = PATHS["trainer_folder"] / Path('logger_sweep.json')
@@ -50,10 +50,7 @@ class NNTrainer:
 
     def ejecutar_barrido(self) -> None:
         for punto in tqdm(self.puntos, desc='Ejecutando punto...'):
-            self.ejecutar_punto(
-                    punto, 
-                    save_log=not self.TRAINING_IN_EARNEST,
-                    progress_bar=self.TRAINING_IN_EARNEST)
+            self.ejecutar_punto(punto)
         print(self.LOGGER)
         with open(self.LOGGER_PATH, 'w') as f:
             json.dump(self.LOGGER, f)
@@ -72,18 +69,18 @@ class NNTrainer:
         self.crear_modelo(punto)
         batch_size = punto[7]
         # Entrenar el modelo
-        try:
-            results = self.train_model(batch_size, progress_bar=progress_bar)
+        try:  
+            results = self.train_model(batch_size, progress_bar=self.TRAINING_IN_EARNEST)
             loss = results['test']['loss'][-1]
             f1 = results['test']['f1'][-1]
-            accurracy = results['test']['accuracy'][-1]
+            accurracy = results['test']['accurracy'][-1]
             msg = 'No errors'
         except Exception as e:
             loss, f1, accurracy = np.infty, np.infty, np.infty
             msg = f'Error: {e}'
-            results = None
+            results = {'Error:': str(e)}
         # Guardar el modelo
-        if save_log:
+        if not self.TRAINING_IN_EARNEST:
             # Guardar datos en log
             log = dict()
             log['loss'] = loss
@@ -140,8 +137,8 @@ class NNTrainer:
                 #total_loss += loss.item()
 
                 if torch.isnan(loss):
-
-                    raise Exception(f'{loss.item()=}---{next_sentence_prediction=}\n{masked_language=}\n{next_loss=}\n{mask_loss=}\n{total_loss=}\n {bert_inputs=}\n{bert_labels=}\n{segment_labels=}\n{is_nexts=}') 
+                    # raise Exception(f'{loss.item()=}---{next_sentence_prediction=}\n{masked_language=}\n{next_loss=}\n{mask_loss=}\n{total_loss=}\n {bert_inputs=}\n{bert_labels=}\n{segment_labels=}\n{is_nexts=}') 
+                    total_loss += 100_000
                 else:
                     total_loss += loss.item()
 
@@ -162,7 +159,7 @@ class NNTrainer:
                 eval_f1s.append(f1)
             
             if not self.TRAINING_IN_EARNEST and (step == len(train_dataloader) - 1):
-                eval_loss, eval_accurracies, eval_f1s = evaluate(test_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
+                eval_losses, eval_accurracies, eval_f1s = evaluate(test_dataloader, self.model, self.loss_fn_nsp, self.loss_fn_mlm, self.device)
         
         results = dict()
         if self.TRAINING_IN_EARNEST:
@@ -352,10 +349,9 @@ class NNTrainer:
         dict_self = {
             'puntos':self.puntos,
             'atributos': {
-                'ENV_NAME':self.ENV_NAME,
-                'N_ENVS':self.N_ENVS,
+                'nombre':self.nombre,
                 'N_POINTS':self.N_POINTS,
-                'TIME_STEPS':self.TIME_STEPS
+                'N_EPOCHS':self.N_EPOCHS
             }
         }
         with open(self.TRAINER_PATH, 'wb') as f:
@@ -368,7 +364,7 @@ class NNTrainer:
         with open(trainer_path, 'rb') as f:
             dict_self = pickle.load(f)
         # Create trainer
-        trainer = DQNTrainer(env, env_name)
+        trainer = NNTrainer(env, env_name)
         # Update logger
         with open(trainer.LOGGER_PATH, 'r') as f:
             trainer.LOGGER = json.load(f)
@@ -405,28 +401,37 @@ class NNTrainer:
         hiperparametros['batch_size'] = punto[7]
         return hiperparametros
 
-    def plot_results(self, XXXXX) -> None:
+    def plot_results(self, results: Dict[str, List[any]]) -> None:
 
-        batch_size = ...
-        # Crear dataloader
-        train_dataloader , test_dataloader = self.create_dataloader(batch_size)
+        train_losses = results['training']['loss']
+        eval_losses = results['test']['loss']
+
+        train_accurracies = results['training']['accurracy']
+        eval_accurracies = results['test']['accurracy']
+
+        train_f1s = results['training']['f1']
+        eval_f1s = results['test']['f1']
 
         fig,axes = plt.subplots(
             1,3,
             figsize=(9,3),
             tight_layout=True
         )
-        sns.lineplot(ax = axes[0], x=range(1, self.N_EPOCHS + 1), y=train_losses, label='Training Loss')
-        sns.lineplot(ax = axes[0], x=range(1, self.N_EPOCHS + 1), y=eval_losses, label='Evaluation Loss')
-        sns.lineplot(ax = axes[1], x=range(1, self.N_EPOCHS + 1), y=accurracies, label='Accurracy')
-        sns.lineplot(ax = axes[2], x=range(1, self.N_EPOCHS + 1), y=f1s, label='F1 score')
+        sns.lineplot(ax = axes[0], x=range(1, self.N_EPOCHS + 1), y=train_losses, label='training')
+        sns.lineplot(ax = axes[0], x=range(1, self.N_EPOCHS + 1), y=eval_losses, label='evaluation')
+
+        sns.lineplot(ax = axes[1], x=range(1, self.N_EPOCHS + 1), y=train_accurracies, label='training')
+        sns.lineplot(ax = axes[1], x=range(1, self.N_EPOCHS + 1), y=eval_accurracies, label='evaluation')
+
+        sns.lineplot(ax = axes[2], x=range(1, self.N_EPOCHS + 1), y=train_f1s, label='training')
+        sns.lineplot(ax = axes[2], x=range(1, self.N_EPOCHS + 1), y=eval_f1s, label='evaluation')
 
         axes[0].set_xlabel('Epoch')
         axes[0].set_ylabel('Loss')
         axes[1].set_xlabel('Epoch')
         axes[1].set_ylabel('Accurracy')
         axes[2].set_ylabel('F1 score')
-        axes[0].set_title('Training and Evaluation Loss')
+        axes[0].set_title('Loss')
         axes[1].set_title('Accurracy')
         axes[2].set_title('F1 score')
         plt.legend()
