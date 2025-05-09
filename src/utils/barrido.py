@@ -76,7 +76,7 @@ class NNTrainer:
             accurracy = results['test']['accurracy'][-1]
             msg = 'No errors'
         except Exception as e:
-            loss, f1, accurracy = np.infty, np.infty, np.infty
+            loss, f1, accurracy = np.inf, np.inf, np.inf
             msg = f'Error: {e}'
             results = {'Error:': str(e)}
         # Guardar el modelo
