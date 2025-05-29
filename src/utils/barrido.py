@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 from itertools import product
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
 from sklearn.model_selection import train_test_split
 
 from src.config import PATHS
@@ -25,13 +25,14 @@ from src.utils.utils_vocab import BasicTokenizer, BERTDataset, evaluate
 class NNTrainer:
 
     N_POINTS = 20
-    N_EPOCHS = 3
+    N_EPOCHS = 2
     LOGGER = list()
     LOGGER_PATH = PATHS["trainer_folder"] / Path('logger_sweep.json')
-    TRAINER_PATH = PATHS["trainer_folder"] / Path('trainer.pkl')
+    TRAINER_PATH = PATHS["trainer_folder"] 
     TRAINING_IN_EARNEST = False
     debug = True
     PAD_IDX = 1
+    accepted_optimizers = ['adam', 'adamw', 'sgd']
 
     def __init__(
                 self, 
@@ -317,18 +318,20 @@ class NNTrainer:
             return torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         elif optimizer == "sgd":
             return torch.optim.SGD(self.model.parameters(), lr=learning_rate)
+        elif optimizer == "adamw":
+            return torch.optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=0.01)
         else:
             raise Exception(f'Optimizer {optimizer} not accepted. Choose from {self.accepted_optimizers}')
 
     def crear_puntos(self) -> None:
-        rango_embedding_dim = [4, 8, 16, 32]
-        rango_net_layers = [4, 6, 8, 10]
-        rango_net_heads = [2, 4, 6, 8]
-        rango_dropout = [0.1, 0.2, 0.3, 0.4]
-        rango_optimizer_class = ['adam', 'sgd']
-        rango_learning_rate_initial = [0.01, 0.001, 0.0001, 0.00001]
-        rango_gamma = [0.1, 0.2, 0.3, 0.4]
-        rango_batch_size = [1, 4, 16, 32, 64]
+        rango_embedding_dim = [4, 8, 16]
+        rango_net_layers = [2, 3]
+        rango_net_heads = [2]
+        rango_dropout = [0.1]
+        rango_optimizer_class = ['adam', 'adamw', 'sgd']
+        rango_learning_rate_initial = [3e-4, 1e-4, 5e-5, 3e-5]
+        rango_gamma = [0.1, 0.4]
+        rango_batch_size = [8, 16, 32, 64, 128]
         opciones = product(
             rango_embedding_dim,
             rango_net_layers,
@@ -345,7 +348,7 @@ class NNTrainer:
         )
         self.puntos = puntos
 
-    def save(self) -> None:
+    def save(self, file_name:Optional[Union[str,None]]=None) -> None:
         dict_self = {
             'puntos':self.puntos,
             'atributos': {
@@ -354,9 +357,13 @@ class NNTrainer:
                 'N_EPOCHS':self.N_EPOCHS
             }
         }
-        with open(self.TRAINER_PATH, 'wb') as f:
+        if file_name is None:
+            file_name = self.TRAINER_PATH / Path('trainer.pkl')
+        else:
+            file_name = self.TRAINER_PATH / Path(file_name)
+        with open(file_name, 'wb') as f:
             pickle.dump(dict_self, f)
-        print(f'Self guardado con éxito en {self.TRAINER_PATH}')
+        print(f'Self guardado con éxito en {file_name}')
 
     @staticmethod
     def from_file(env, trainer_path, env_name:Optional[str]='Env') -> 'NNTrainer':
